@@ -112,6 +112,140 @@ def evaluate(ref, hypo):
 
     return final_scores
 
+def eval_split_visual_news(cnn_model, model, crit, loader, eval_kwargs={}, return_attention=False):
+    verbose = eval_kwargs.get('verbose', True)
+    num_images = eval_kwargs.get('num_images', eval_kwargs.get('val_images_use', -1))
+    split = eval_kwargs.get('split', 'val')
+    lang_eval = eval_kwargs.get('language_eval', 0)
+    dataset = eval_kwargs.get('dataset', 'news')
+    beam_size = eval_kwargs.get('beam_size', 1)
+
+    # Make sure in the evaluation mode
+    cnn_model.eval()
+    model.eval()
+
+    loader.reset_iterator(split)
+
+    n = 0
+    loss = 0
+    loss_sum = 0
+    loss_evals = 1e-8
+    predictions = []
+
+    while True:
+        data = loader.get_batch(split)
+        data['images'] = utils.prepro_images(data['images'], False)
+        n = n + loader.batch_size
+
+        #evaluate loss if we have the labels
+        loss = 0
+        # vis_attention, sen_attention = [], []
+        # Get the image features first
+        tmp = [data['images'], data['labels'], data['masks']]
+        tmp = [Variable(torch.from_numpy(_), requires_grad=False).to(device) for _ in tmp]
+        images, labels, masks = tmp
+        with torch.no_grad():
+          images_feats = cnn_model(images) 
+        sen_embed = Variable(torch.from_numpy(np.array(data['sen_embed'])).to(device))
+        with torch.no_grad():
+          out = model(sen_embed.float(), masks, labels[:,:-1], images_feats)
+          out = out.contiguous().view(-1, out.size(2))
+          labels = labels[:, 1:].contiguous().view(-1)
+          loss = crit(out, labels)
+          loss_sum += loss
+          loss_evals = loss_evals + 1
+        #with torch.no_grad():
+        #    att_feats = cnn_model(images).permute(0, 2, 3, 1) # .contiguous()
+            # att_feats = _att_feats = cnn_model(images).permute(0, 2, 3, 1).contiguous()
+            # fc_feats = _fc_feats = att_feats.mean(2).mean(1)
+        #    fc_feats = att_feats.mean(2).mean(1)
+        #sen_embed = data.get('sen_embed', None)
+
+        # forward the model to get loss
+
+        # if data.get('labels', None) is not None:
+
+        #     att_feats = att_feats.unsqueeze(1).expand(*((att_feats.size(0), loader.seq_per_img,) + att_feats.size()[1:])).contiguous().view(*((att_feats.size(0) * loader.seq_per_img,) + att_feats.size()[1:]))
+        #     fc_feats = fc_feats.unsqueeze(1).expand(*((fc_feats.size(0), loader.seq_per_img,) + fc_feats.size()[1:])).contiguous().view(*((fc_feats.size(0) * loader.seq_per_img,) + fc_feats.size()[1:]))
+        #     if sen_embed is not None:
+        #         with torch.no_grad():
+        #             sen_embed = np.array(sen_embed, dtype=np.float32)
+        #             loss = crit(model(fc_feats, att_feats, labels, Variable(torch.from_numpy(sen_embed)).cuda()),
+        #                         labels[:, 1:], masks[:, 1:])
+        #     else:
+        #         loss = crit(model(fc_feats, att_feats, labels), labels[:,1:], masks[:,1:]).data[0]
+        #     loss_sum += loss
+        #     loss_evals = loss_evals + 1
+
+        # forward the model to also get generated samples for each image
+        # Only leave one feature for each image, in case duplicate sample
+        # fc_feats, att_feats = _fc_feats, _att_feats
+        # forward the model to also get generated samples for each image
+        if sen_embed is not None:
+            if return_attention:
+                seq, _, atts = model.sample(fc_feats, att_feats, eval_kwargs, Variable(torch.from_numpy(sen_embed)).cuda(),
+                                            return_attention)
+                vis_attention = np.array([att[0] for att in atts])
+                sen_attention = np.array([att[1] for att in atts])
+            else:
+                seq, _= model.sample(fc_feats, att_feats, eval_kwargs,
+                                            Variable(torch.from_numpy(sen_embed)).cuda(),
+                                            return_attention)
+
+        else:
+            seq, _ = model.sample(fc_feats, att_feats, eval_kwargs)
+        #set_trace()
+        sents = utils.decode_sequence(loader.get_vocab(), seq)
+
+        for k, sent in enumerate(sents):
+            entry = {'image_id': data['infos'][k]['id'], 'caption': sent, 'image_path': data['infos'][k]['file_path']}
+            if return_attention:
+                sen_length = len(sent.split())
+                entry['vis_att'] = vis_attention[:sen_length, k, :].tolist()
+                entry['sen_att'] = sen_attention[:sen_length, k, :].tolist()
+            if eval_kwargs.get('dump_path', 0) == 1:
+                entry['file_name'] = data['infos'][k]['file_path']
+            predictions.append(entry)
+            if eval_kwargs.get('dump_images', 0) == 1:
+                # dump the raw image to vis/ folder
+                cmd = 'cp "' + os.path.join(eval_kwargs['image_root'], data['infos'][k]['file_path']) + '" vis/imgs/img' + str(len(predictions)) + '.jpg' # bit gross
+                print(cmd)
+                os.system(cmd)
+
+            if verbose:
+                print('image %s: %s' %(entry['image_id'], entry['caption']))
+
+        # if we wrapped around the split or used up val imgs budget then bail
+        ix0 = data['bounds']['it_pos_now']
+        ix1 = data['bounds']['it_max']
+        if num_images != -1:
+            ix1 = min(ix1, num_images)
+        for i in range(n - ix1):
+            predictions.pop()
+        # break
+        if verbose:
+            print('evaluating validation preformance... %d/%d (%f)' %(ix0 - 1, ix1, loss))
+
+        if data['bounds']['wrapped']:
+            break
+        if num_images >= 0 and n >= num_images:
+            break
+        #break
+
+
+    lang_stats = None
+    if lang_eval == 1:
+        lang_stats = language_eval(dataset, predictions, eval_kwargs['id'], split)
+
+    # if sen_embed is not None:
+    #     atts = [{'file_path': d['file_path'], 'vis_att':vis_attention[i], 'sen_att':sen_attention[i]} for i, d in enumerate(data['infos'])]
+    #     return loss_sum/loss_evals, predictions, lang_stats, atts
+    # Switch back to training mode
+    model.train()
+    return loss_sum/loss_evals, predictions, lang_stats
+
+
+
 def eval_split(cnn_model, model, crit, loader, eval_kwargs={}, return_attention=False):
     verbose = eval_kwargs.get('verbose', True)
     num_images = eval_kwargs.get('num_images', eval_kwargs.get('val_images_use', -1))
