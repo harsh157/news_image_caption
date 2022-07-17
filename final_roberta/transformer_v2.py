@@ -200,10 +200,11 @@ class DecoderLayer(nn.Module):
         "Follow Figure 1 (right) for connections."
         img = memory['image']
         article = memory['article']
+        article_mask = memory['article_mask']
         x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
         #TODO Key masking in MHAttention
         x_img = self.sublayer[1](x, lambda x: self.img_attn(x, img, img, src_mask))
-        x_article = self.sublayer[2](x, lambda x: self.article_attn(x, article, article, src_mask))
+        x_article = self.sublayer[2](x, lambda x: self.article_attn(x, article, article, article_mask))
 
         X_context = torch.cat([x_img, x_article], dim=-1)
         x = self.context_fc(X_context)
@@ -215,6 +216,8 @@ def attention(query, key, value, mask=None, dropout=None):
     d_k = query.size(-1)
     scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
     if mask is not None:
+        #print(scores.size())
+        #print(mask.size())
         scores = scores.masked_fill(mask == 0, -1e9)
     p_attn = scores.softmax(dim=-1)
     if dropout is not None:

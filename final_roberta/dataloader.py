@@ -16,9 +16,11 @@ import glob
 import preprocess
 import spacy
 import time
+from transformers import BertTokenizerFast
 
 client = MongoClient(host='localhost', port=27017)
 PAD_IDX = 0
+MAX_LENGTH = 512
 
 class GoodNewsVocab:
   def __init__(self):
@@ -75,9 +77,10 @@ class SentenceEmbed:
     return v,vlen
 
 
+
 class GoodNewsDataset:
 
-    def __init__(self, split='train', tok_caption_path=''):
+    def __init__(self, split='train', tok_caption_path='', start_idx = 0, _max_len=512):
         self.split = split
         with open('/home/jupyter/tokenized_caption.pkl','rb') as pfile:
             self.tokenized_caption = pkl.load(pfile)
@@ -91,11 +94,15 @@ class GoodNewsDataset:
         all_images = set([image.split('/')[-1].split('.')[0] for image in all_images])
         print(client.goodnews.splits.count_documents({'split': {'$eq': split}}))
         self.ids = np.array([article['_id'] for article in tqdm(sample_cursor) if article['_id'] in all_images])
+        self.tokenizer = BertTokenizerFast.from_pretrained('bert-base-cased')
         print(len(self.ids))
         sample_cursor.close()
+        self.start_idx = start_idx
         #self.embedder = SentenceEmbed()
 
     def __getitem__(self, idx):
+        idx += self.start_idx
+        idx = idx % (len(self.ids))
         sample_id = self.ids[idx]
         sample = self.db.splits.find_one({'_id': {'$eq': sample_id}})
         article = self.db.articles.find_one({'_id': {'$eq': sample['article_id']},}, projection=['_id', 'context', 'images', 'web_url'])
@@ -113,14 +120,17 @@ class GoodNewsDataset:
         #    context = self.embedder.embed(context)
 
 
-        if sample_id in self.tokenized_caption:
-            caption_tokens = self.tokenized_caption[sample_id]
-        else:
-            caption_tokens = self.tokenize(caption)
-            self.tokenized_caption[sample_id] = caption_tokens
-        caption = ' '.join(caption_tokens)
+        #if sample_id in self.tokenized_caption:
+        #    caption_tokens = self.tokenized_caption[sample_id]
+        #else:
+        #    caption_tokens = self.tokenize(caption)
+        #    self.tokenized_caption[sample_id] = caption_tokens
+        caption_tokens = self.tokenizer.encode(caption)[:MAX_LENGTH]
+
+
+        #caption = ' '.join(caption_tokens)
         #print(caption)
-        caption_tokens = self.prepare_target_tokens(caption_tokens)
+        #caption_tokens = self.prepare_target_tokens(caption_tokens)
         
         metadata = {'web_url': article['web_url'], 'image_path': image_path, 'caption':caption.strip(), 'article_id': sample['article_id']}
         image = self.preprocess(image)

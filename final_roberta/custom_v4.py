@@ -83,7 +83,7 @@ def parse_opt():
     # Optimization: General
     parser.add_argument('--max_epochs', type=int, default=150,
                     help='number of epochs')
-    parser.add_argument('--batch_size', type=int, default=16,
+    parser.add_argument('--batch_size', type=int, default=32,
                     help='minibatch size')
     parser.add_argument('--grad_clip', type=float, default=5.0, #5.,
                     help='clip gradients at this value')
@@ -227,7 +227,7 @@ def evaluate_bleu(gen_texts_2, captions_2, eval_out):
     return eval_out
 
 #from final.transformer import Batch
-def run_epoch(loader, encoder, model, loss_compute, epoch, scheduler, optimizer, dataset, mode='train', size_per_epoch=5000):
+def run_epoch(opt, loader, encoder, model, loss_compute, epoch, scheduler, optimizer, dataset, mode='train', size_per_epoch=5000):
 
     """Train a single epoch"""
     start = time.time()
@@ -246,9 +246,15 @@ def run_epoch(loader, encoder, model, loss_compute, epoch, scheduler, optimizer,
         start = size_per_epoch*(epoch%(max_epochs))
     else:
         cider_scorer = CiderScorer(n=4, sigma=6.0)
-        
+    batch_size =  vars(opt)['batch_size']   
     #print(start)
     for target_batch, target_mask, label_batch, image_batch, context_batch, ntokens, metadata in loader:
+        #print(iteration)
+        #if iteration < 2482:
+        #    iteration += 1
+        #    continue
+        if target_batch.shape[0] != batch_size:
+            continue
         n_samples += target_batch.shape[0]
         start_batch = time.time()
         #data = loader.get_batch(mode)
@@ -294,7 +300,7 @@ def run_epoch(loader, encoder, model, loss_compute, epoch, scheduler, optimizer,
             #train_state.accum_step += 1
             scheduler.step()
 
-        total_loss += loss
+        total_loss += loss.item()
         total_tokens += ntokens
         tokens += ntokens
         if iteration % 40 == 1 and (mode == "train" or mode == "train+log"):
@@ -324,13 +330,17 @@ def run_epoch(loader, encoder, model, loss_compute, epoch, scheduler, optimizer,
             tokens = 0
         iteration += 1
         if mode == 'val':
-          outputs = translate_sentence(model, memory, dataset.vocab['word2idx'], dataset.vocab['idxtoword'], 50)#model, image_feats, word_map, max_len
+          outputs = translate_sentence(model, memory, dataset.tokenizer, 50)#model, image_feats, word_map, max_len
+          #outputs = translate_sentence(model, memory, dataset.vocab['word2idx'], dataset.vocab['idxtoword'], 50)#model, image_feats, word_map, max_len
           captions = [m['caption'] for m in metadata]
           gen_texts_2 = [re.sub(r'[^\w\s]', '', t) for t in outputs]
           captions_2 = [re.sub(r'[^\w\s]', '', t) for t in captions]
           evaluate_bleu(gen_texts_2, captions_2, eval_out)
           for gen, ref in zip(gen_texts_2, captions_2):
             cider_scorer += (gen, [ref])
+          if iteration % 40 == 0:
+              print(gen_texts_2[0])
+              print(captions_2[0])
 
           #for k,sent in enumerate(outputs):
           #  entry = {'image_id': data['infos'][k]['id'], 'caption': sent, 'image_path'
@@ -343,12 +353,12 @@ def run_epoch(loader, encoder, model, loss_compute, epoch, scheduler, optimizer,
         del loss
         del loss_node
         torch.cuda.empty_cache()
-        if iteration > size_per_epoch:
-            break
-        if mode == 'val' and n_samples > 5000:
-            break
-        if epoch == 0 and mode == 'train':
-            break
+        #if iteration > size_per_epoch:
+        #    break
+        #if mode == 'val' and n_samples > 5000:
+        #    break
+        #if epoch == 0 and mode == 'train':
+        #    break
         #if data['bounds']['wrapped']:
         #  break
         #break
@@ -409,25 +419,64 @@ def rate(step, model_size, factor, warmup):
         model_size ** (-0.5) * min(step ** (-0.5), step * warmup ** (-1.5))
     )
 
-def train(opt):
-    dataset = GoodNewsDataset()
-    val_dataset= GoodNewsDataset(split='val')
-    loader = DataLoader(dataset, batch_size=vars(opt)['batch_size'], collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=vars(opt)['batch_size'], collate_fn=collate_fn)
-    vocab_size = len(dataset.vocab['word2idx'])
-    pad_idx = 0
-    d_model = 512
-    model = transformer_v2.make_model_news(vocab_size+1, num_enc_dec=3, dim_model = d_model, dim_feedfwd=2048, img_dim=1024)
+class LoaderWrapper:
+    def __init__(self, dataloader, n_step):
+        self.step = n_step
+        self.idx = 0
+        self.loader = dataloader
+        self.iter_loader = iter(self.loader)
     
+    def __iter__(self):
+        return self
+
+    def __len__(self):
+        return self.step
+
+    def __next__(self):
+        # if reached number of steps desired, stop
+        if self.idx == self.step:
+            self.idx = 0
+            raise StopIteration
+        else:
+            self.idx += 1
+        # while True
+        try:
+            return next(self.iter_loader)
+        except StopIteration:
+            # reinstate iter_loader, then continue
+            self.iter_loader = iter(self.loader)
+            return next(self.iter_loader)
+
+def train(opt):
+    model_path = 'v4/latest.pt'
+    sch_path =  'v4/scheduler.pth.tar'
+    perf_pkl = 'v4/best_model.pkl'
+    info_pkl = 'v4/model_info.pkl'
+    best_model_path = 'v4/best.pt'
+
+    pad_idx = 0
+    d_model = 1024
+    train_step_epoch = 5000
+    val_step_epoch = 200
+    batch_size = vars(opt)['batch_size']
+
+    epoch_cont = 0
+    if os.path.exists(model_path):
+      with open(info_pkl,'rb') as bfile:
+          info = pkl.load(bfile)
+          epoch_cont = info['epoch']+1
+
+    dataset = GoodNewsDataset(start_idx = epoch_cont*train_step_epoch * batch_size)
+    val_dataset= GoodNewsDataset(split='val', start_idx = epoch_cont*val_step_epoch * batch_size)
+    loader = LoaderWrapper(DataLoader(dataset, batch_size=batch_size, collate_fn=collate_fn), train_step_epoch)
+    val_loader = LoaderWrapper(DataLoader(val_dataset, batch_size=batch_size, collate_fn=collate_fn), val_step_epoch)
+    vocab_size = dataset.tokenizer.vocab_size
+    model = transformer_v2.make_model_news(vocab_size+1, num_enc_dec=3, dim_model = d_model, dim_feedfwd=2048, img_dim=1024, sent_dim=1024)
+
     model = model.cuda()
     encoder = Encoder()
-    model_path = 'v3/latest.pt'
-    info_pkl = 'v3/best_model.pkl'
-    best_model_path = 'v3/best.pt'
-    if os.path.exists(model_path):
-      model.load_state_dict(torch.load(model_path, map_location=device))
-    criterion = LabelSmoothing(vocab_size+1, padding_idx=pad_idx, smoothing=0.0)
-    #criterion = nn.CrossEntropyLoss(ignore_index=0,reduction="sum")
+    #criterion = LabelSmoothing(vocab_size+1, padding_idx=pad_idx, smoothing=0.0)
+    criterion = nn.CrossEntropyLoss(ignore_index=0,reduction="sum")
     criterion.cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=1, betas=(0.9, 0.98), eps=1e-9)
 
@@ -437,21 +486,32 @@ def train(opt):
             step, d_model, factor=1, warmup=30000
         ),
     )
+    if os.path.exists(model_path):
+      model.load_state_dict(torch.load(model_path, map_location=device))
+      lr_scheduler.load_state_dict(torch.load(sch_path))
     best_bleu4 = 0
-    if os.path.exists(info_pkl):
-        with open(info_pkl,'rb') as bfile:
+    if os.path.exists(perf_pkl):
+        with open(perf_pkl,'rb') as bfile:
             best_bleu4 = pkl.load(bfile)['bleu-4']
-    
-    for i in range(80):
+ 
+  
+    for i in range(epoch_cont, 80):
       print(f"Epoch {i} Train ====", flush=True)
       model.train()
-      tloss,_temp = run_epoch(loader,encoder,model,SimpleLossCompute(model.generator, criterion), i, lr_scheduler, optimizer, dataset)
+      tloss,_temp = run_epoch(opt, loader,encoder,model,SimpleLossCompute(model.generator, criterion), i, lr_scheduler, optimizer, dataset)
       print(f"Epoch {i} Train ==== Avg loss: {tloss}", flush=True)
       torch.cuda.empty_cache()
       GPUtil.showUtilization()
+      torch.save(model.state_dict(), model_path)
+      torch.save(lr_scheduler.state_dict(), sch_path)
+      with open(info_pkl,'wb') as bfile:
+          info = {'epoch':i}
+          pkl.dump(info, bfile)
+
+
       print(f"Epoch {i} Validation ====", flush=True)
       model.eval()
-      sloss,eval_out = run_epoch(
+      sloss,eval_out = run_epoch(opt,
             val_loader,encoder,
             model,
             SimpleLossCompute(model.generator, criterion),i,DummyScheduler(),
@@ -462,11 +522,15 @@ def train(opt):
       if bleu4 > best_bleu4:
         best_bleu4 = bleu4
         torch.save(model.state_dict(), best_model_path)
-        with open(info_pkl,'wb') as bfile:
+        with open(perf_pkl,'wb') as bfile:
             pkl.dump(eval_out, bfile)
       print(sloss)
 
       torch.save(model.state_dict(), model_path)
+      torch.save(lr_scheduler.state_dict(), sch_path)
+      with open(info_pkl,'wb') as bfile:
+          info = {'epoch':i}
+          pkl.dump(info, bfile)
 
 def greedy_decode(model, src, src_mask, max_len, start_symbol):
     memory = model.encode(src, src_mask)
@@ -540,32 +604,39 @@ def language_eval(preds, split):
     return final_scores
 
 
-def decode_sequence(ix2word, word2idx, seq, start=0):                                                 
+def decode_sequence(tokenizer, seq, start=0):                                                 
     N, D = seq.size()
     #print(seq.size())
     out = []                                                                          
     for i in range(N):
-        txt = ''                                                                      
+        
+        tokens = []
         for j in range(start,D):
             ix = seq[i,j].cpu().numpy()                                               
-            if ix == int(word2idx['</s>']):
+            if ix == int(tokenizer.sep_token_id):
                 break                                                                 
-            #if ix > 0 :
-            #if ix == 0:
-            #  txt = txt + '<pad>'
-            #else:
-            if ix >= 2:
-              txt = txt + ' ' + ix2word[int(ix)]
-              #txt = txt +                                        
+            tokens.append(int(ix))
+        txt = tokenizer.decode(tokens, skip_special_tokens=True)
+        #for j in range(start,D):
+        #    ix = seq[i,j].cpu().numpy()                                               
+        #    if ix == int(tokenizer.sep_token_id):
+        #        break                                                                 
+        #    #if ix > 0 :
+        #    #if ix == 0:
+        #    #  txt = txt + '<pad>'
+        #    #else:
+        #    if ix >= 2:
+        #      txt = txt + ' ' + ix2word[int(ix)]
+        #      #txt = txt + 
         out.append(txt)
     #for i in range(3):
     #    print(out[i])
     return out
 
 
-def translate_sentence(model, image_feats, word2idx, ix2word, max_len):         
+def translate_sentence(model, image_feats, tokenizer, max_len):         
     model.eval()                                
-    ys = torch.zeros(opt.batch_size, 1).fill_(int(word2idx['<s>'])).type(torch.LongTensor).to(device)
+    ys = torch.zeros(opt.batch_size, 1).fill_(int(tokenizer.cls_token_id)).type(torch.LongTensor).to(device)
     for i in range(max_len - 1):
         out = model.decode(
             image_feats, None, ys, transformer_v2.subsequent_mask(ys.size(1)).to(device)
@@ -577,7 +648,7 @@ def translate_sentence(model, image_feats, word2idx, ix2word, max_len):
             [ys, next_word.unsqueeze(1)], dim=1
         )
         #print(ys.shape)
-    outputs = decode_sequence(ix2word, word2idx, ys, start=1)
+    outputs = decode_sequence(tokenizer, ys, start=1)
     return outputs
 
 

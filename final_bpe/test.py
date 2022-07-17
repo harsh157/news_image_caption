@@ -227,7 +227,7 @@ def evaluate_bleu(gen_texts_2, captions_2, eval_out):
     return eval_out
 
 #from final.transformer import Batch
-def run_epoch(loader, encoder, model, loss_compute, epoch, scheduler, optimizer, dataset, mode='train', size_per_epoch=5000):
+def run_epoch(loader, encoder, model, loss_compute, scheduler, optimizer, dataset, mode='train', size_per_epoch=5000):
 
     """Train a single epoch"""
     start = time.time()
@@ -241,117 +241,55 @@ def run_epoch(loader, encoder, model, loss_compute, epoch, scheduler, optimizer,
     n_samples = 0
     eval_out = {'bleu-1':0.0,'bleu-2':0.0,'bleu-3':0.0,'bleu-4':0.0,'bleu-1r':0.0, 'CIDEr':0.0}
     start = 0
-    if mode == 'train':
-        max_epochs = (len(loader)//size_per_epoch) + 1
-        start = size_per_epoch*(epoch%(max_epochs))
-    else:
-        cider_scorer = CiderScorer(n=4, sigma=6.0)
+    cider_scorer = CiderScorer(n=4, sigma=6.0)
         
     #print(start)
     for target_batch, target_mask, label_batch, image_batch, context_batch, ntokens, metadata in loader:
         n_samples += target_batch.shape[0]
         start_batch = time.time()
-        #data = loader.get_batch(mode)
-        #data['images'] = utils.prepro_images(data['images'], True)
-        #tmp = [data['images'], data['labels'], data['masks']]
-        #tmp = [Variable(torch.from_numpy(_), requires_grad=False).to(device) for _ in tmp]
-        #images, labels, masks = tmp
 
-        #images = images.to(device)
-        ##print(labels.shape)
-        #images_feats = encoder(images)
-
-        #batch = final.transformer_new.Batch(trg=labels)
-        #sen_embed = Variable(torch.from_numpy(np.array(data['sen_embed'])).cuda())
-        #print(image_batch)
         memory = encoder.forward(image_batch, context_batch, metadata)
         #print('Encoder time:', time.time()-start_batch)
         #print(target_batch)
         target_batch = target_batch.to(device)
         target_mask = target_mask.to(device)
         label_batch = label_batch.to(device)
-        out = model.forward(memory, target_batch, 
-                            None, target_mask)
         #torch.cuda.synchronize()
         #print('Decoder time:', time.time()-start_batch)
 
 
         #print(out.shape)
-        loss, loss_node = loss_compute(out, label_batch, ntokens)
         #torch.cuda.synchronize()
         #print('Loss time:', time.time()-start_batch)
 
         # loss_node = loss_node / accum_iter
-        if mode == "train" or mode == "train+log":
-            optimizer.zero_grad(set_to_none=True)
-            loss_node.backward()
-            #print('Backprop time:', time.time()-start_batch)
-            #train_state.step += 1
-            #train_state.samples += batch.src.shape[0]
-            #train_state.tokens += batch.ntokens
-            optimizer.step()
-            n_accum += 1
-            #train_state.accum_step += 1
-            scheduler.step()
 
-        total_loss += loss
         total_tokens += ntokens
         tokens += ntokens
-        if iteration % 40 == 1 and (mode == "train" or mode == "train+log"):
-            lr = optimizer.param_groups[0]["lr"]
+        outputs = translate_sentence(model, memory, dataset.vocab['word2idx'], dataset.vocab['idxtoword'], 50)#model, image_feats, word_map, max_len
+        captions = [m['caption'] for m in metadata]
+        gen_texts_2 = [re.sub(r'[^\w\s]', '', t) for t in outputs]
+        captions_2 = [re.sub(r'[^\w\s]', '', t) for t in captions]
+        evaluate_bleu(gen_texts_2, captions_2, eval_out)
+        for gen, ref in zip(gen_texts_2, captions_2):
+          cider_scorer += (gen, [ref])
+
+
+        if iteration % 40 == 1:
             elapsed = time.time() - start
             print(
                 (
-                    "Epoch Step: %6d | Iter Step: %d/%d | Loss: %6.2f "
-                    + "| Tokens / Sec: %7.1f | Learning Rate: %6.1e | Time/Batch: %7.2f"
-                )
-                % (epoch, (iteration+1), int(len(loader)), 
-                   loss / ntokens, tokens / elapsed, lr, time.time()-start_batch)
-            )
-            start = time.time()
-            tokens = 0
-        if iteration % 40 == 1 and (mode == "val"):
-            elapsed = time.time() - start
-            print(
-                (
-                    "Validation Epoch Step: %6d | Iter Step: %d/%d | Loss: %6.2f "
-                    + "| Tokens / Sec: %7.1f | Time/Batch: %7.2f | nsamples:%d"
-                )
-                % (epoch, (iteration+1), int(len(loader)), 
-                   loss / ntokens, tokens / elapsed, time.time()-start_batch, n_samples)
+                    "Test Epoch Step: %6d/%6d | Bleu-4: %3.2f | Bleu: %3.2f "
+                )%
+                   (iteration, len(loader), eval_out['bleu-4']/n_samples, eval_out['bleu-1']/n_samples)
             )
             start = time.time()
             tokens = 0
         iteration += 1
-        if mode == 'val':
-          outputs = translate_sentence(model, memory, dataset.vocab['word2idx'], dataset.vocab['idxtoword'], 50)#model, image_feats, word_map, max_len
-          captions = [m['caption'] for m in metadata]
-          gen_texts_2 = [re.sub(r'[^\w\s]', '', t) for t in outputs]
-          captions_2 = [re.sub(r'[^\w\s]', '', t) for t in captions]
-          evaluate_bleu(gen_texts_2, captions_2, eval_out)
-          for gen, ref in zip(gen_texts_2, captions_2):
-            cider_scorer += (gen, [ref])
 
-          #for k,sent in enumerate(outputs):
-          #  entry = {'image_id': data['infos'][k]['id'], 'caption': sent, 'image_path'
-          #          : data['infos'][k]['file_path']}
-          #  predictions.append(entry)
-          #if iteration == 7000:
-          #  break
-          
-
-        del loss
-        del loss_node
+        if iteration > 1400:
+            break
         torch.cuda.empty_cache()
-        if iteration > size_per_epoch:
-            break
-        if mode == 'val' and n_samples > 5000:
-            break
-        if epoch == 0 and mode == 'train':
-            break
-        #if data['bounds']['wrapped']:
-        #  break
-        #break
     if mode == 'val':
         print(gen_texts_2[:3])
         for key, value in eval_out.items():
@@ -359,7 +297,7 @@ def run_epoch(loader, encoder, model, loss_compute, epoch, scheduler, optimizer,
         cider_score, _ = cider_scorer.compute_score()
         eval_out['CIDEr'] = cider_score * 100
         print(eval_out)
-    return total_loss / total_tokens, eval_out
+    return eval_out
 
 import transformer_v2
 from torch.optim.lr_scheduler import LambdaLR
@@ -409,12 +347,10 @@ def rate(step, model_size, factor, warmup):
         model_size ** (-0.5) * min(step ** (-0.5), step * warmup ** (-1.5))
     )
 
-def train(opt):
-    dataset = GoodNewsDataset()
-    val_dataset= GoodNewsDataset(split='val')
-    loader = DataLoader(dataset, batch_size=vars(opt)['batch_size'], collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=vars(opt)['batch_size'], collate_fn=collate_fn)
-    vocab_size = len(dataset.vocab['word2idx'])
+def test(opt):
+    test_dataset= GoodNewsDataset(split='test')
+    test_loader = DataLoader(test_dataset, batch_size=vars(opt)['batch_size'], collate_fn=collate_fn)
+    vocab_size = len(test_dataset.vocab['word2idx'])
     pad_idx = 0
     d_model = 512
     model = transformer_v2.make_model_news(vocab_size+1, num_enc_dec=3, dim_model = d_model, dim_feedfwd=2048, img_dim=1024)
@@ -424,49 +360,31 @@ def train(opt):
     model_path = 'v3/latest.pt'
     info_pkl = 'v3/best_model.pkl'
     best_model_path = 'v3/best.pt'
+
+    #if os.path.exists(best_model_path):
+    #  model.load_state_dict(torch.load(best_model_path, map_location=device))
     if os.path.exists(model_path):
       model.load_state_dict(torch.load(model_path, map_location=device))
-    criterion = LabelSmoothing(vocab_size+1, padding_idx=pad_idx, smoothing=0.0)
-    #criterion = nn.CrossEntropyLoss(ignore_index=0,reduction="sum")
-    criterion.cuda()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1, betas=(0.9, 0.98), eps=1e-9)
+    criterion = nn.CrossEntropyLoss(ignore_index=0,reduction="sum")
 
-    lr_scheduler = LambdaLR(
-        optimizer=optimizer,
-        lr_lambda=lambda step: rate(
-            step, d_model, factor=1, warmup=30000
-        ),
-    )
     best_bleu4 = 0
     if os.path.exists(info_pkl):
         with open(info_pkl,'rb') as bfile:
-            best_bleu4 = pkl.load(bfile)['bleu-4']
+            info = pkl.load(bfile)
+            print('Validation performance:', info)
+            best_bleu4 = info['bleu-4']
     
-    for i in range(80):
-      print(f"Epoch {i} Train ====", flush=True)
-      model.train()
-      tloss,_temp = run_epoch(loader,encoder,model,SimpleLossCompute(model.generator, criterion), i, lr_scheduler, optimizer, dataset)
-      print(f"Epoch {i} Train ==== Avg loss: {tloss}", flush=True)
-      torch.cuda.empty_cache()
-      GPUtil.showUtilization()
-      print(f"Epoch {i} Validation ====", flush=True)
-      model.eval()
-      sloss,eval_out = run_epoch(
-            val_loader,encoder,
+    model.eval()
+    torch.cuda.empty_cache()
+    GPUtil.showUtilization()
+    eval_out = run_epoch(
+            test_loader,encoder,
             model,
-            SimpleLossCompute(model.generator, criterion),i,DummyScheduler(),
-            DummyOptimizer(), val_dataset,
+            SimpleLossCompute(model.generator, criterion),DummyScheduler(),
+            DummyOptimizer(), test_dataset,
             mode="val"
         )
-      bleu4 = eval_out['bleu-4']
-      if bleu4 > best_bleu4:
-        best_bleu4 = bleu4
-        torch.save(model.state_dict(), best_model_path)
-        with open(info_pkl,'wb') as bfile:
-            pkl.dump(eval_out, bfile)
-      print(sloss)
-
-      torch.save(model.state_dict(), model_path)
+    print(eval_out)
 
 def greedy_decode(model, src, src_mask, max_len, start_symbol):
     memory = model.encode(src, src_mask)
@@ -637,6 +555,6 @@ opt = parse_opt()
 #import dataloader
 torch.cuda.empty_cache()
 #loader = dataloader.make_loader(batch_size=vars(opt)['batch_size'])
-train(opt)
+test(opt)
 
 

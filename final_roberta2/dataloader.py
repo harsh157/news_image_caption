@@ -16,9 +16,19 @@ import glob
 import preprocess
 import spacy
 import time
+#from transformers import BertTokenizerFast
+from transformers import RobertaTokenizer
+import re
 
 client = MongoClient(host='localhost', port=27017)
-PAD_IDX = 0
+PAD_IDX = 1
+MAX_LENGTH = 200
+
+SPACE_NORMALIZER = re.compile(r"\s+")
+def tokenize_line(line): 
+    line = SPACE_NORMALIZER.sub(" ", line)                                            
+    line = line.strip()
+    return line.split()
 
 class GoodNewsVocab:
   def __init__(self):
@@ -77,7 +87,7 @@ class SentenceEmbed:
 
 class GoodNewsDataset:
 
-    def __init__(self, split='train', tok_caption_path=''):
+    def __init__(self, split='train', tok_caption_path='', start_idx = 0, max_len=512):
         self.split = split
         with open('/home/jupyter/tokenized_caption.pkl','rb') as pfile:
             self.tokenized_caption = pkl.load(pfile)
@@ -91,11 +101,47 @@ class GoodNewsDataset:
         all_images = set([image.split('/')[-1].split('.')[0] for image in all_images])
         print(client.goodnews.splits.count_documents({'split': {'$eq': split}}))
         self.ids = np.array([article['_id'] for article in tqdm(sample_cursor) if article['_id'] in all_images])
+        self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
         print(len(self.ids))
         sample_cursor.close()
+        self.start_idx = start_idx
+        #roberta = torch.hub.load('pytorch/fairseq', 'roberta.base')
+        #self.bpe = roberta.bpe.bpe
+        self._max_len = max_len
         #self.embedder = SentenceEmbed()
 
+    def _tokenize(self, text):
+        bpe_tokens = self._byte_pair_encode(text)
+        #sentence = ' '.join(map(str, bpe_tokens))
+        #words = tokenize_line(sentence)
+        words = words[:self._max_len - 2]
+        words = [0] + words + [2]
+        return ' '.join(words)
+
+
+    def _byte_pair_encode(self, text):
+        bpe_tokens = []
+        raw_tokens = self.bpe.re.findall(self.bpe.pat, text)
+        #print(raw_tokens)
+        #for raw_token in raw_tokens:
+        #    #token = ''.join(self.bpe.byte_encoder[b]
+        #    #        for b in raw_token.encode('utf-8'))
+        #    #token_ids = [self.bpe.encoder[bpe_token]
+        #    #        for bpe_token in self.bpe.bpe(token).split(' ')]
+        #    bpe_tokens.extend(token)
+        return ' '.join(raw_tokens).encode('utf-8')
+
+    def preprocess_context(self,text):
+        text = '. '.join(text.split('\n', 1))
+        tokens = tokenize_line(text)
+        return ' '.join(tokens)
+
     def __getitem__(self, idx):
+        #print('1---',idx)
+        idx += self.start_idx
+        #print('2--',idx)
+        idx = idx % (len(self.ids))
+        #print('3--',idx)
         sample_id = self.ids[idx]
         sample = self.db.splits.find_one({'_id': {'$eq': sample_id}})
         article = self.db.articles.find_one({'_id': {'$eq': sample['article_id']},}, projection=['_id', 'context', 'images', 'web_url'])
@@ -113,14 +159,27 @@ class GoodNewsDataset:
         #    context = self.embedder.embed(context)
 
 
-        if sample_id in self.tokenized_caption:
-            caption_tokens = self.tokenized_caption[sample_id]
-        else:
-            caption_tokens = self.tokenize(caption)
-            self.tokenized_caption[sample_id] = caption_tokens
-        caption = ' '.join(caption_tokens)
+        #if sample_id in self.tokenized_caption:
+        #    caption_tokens = self.tokenized_caption[sample_id]
+        #else:
+        #    caption_tokens = self.tokenize(caption)
+        #        print(caption)
         #print(caption)
-        caption_tokens = self.prepare_target_tokens(caption_tokens)
+        #caption = self._tokenize(caption.strip())
+        #context= self._tokenize(context)
+        #print(caption)
+        context = self.preprocess_context(context)
+        #print(context)
+        caption_tokens = self.tokenizer.encode(caption)
+        if len(caption_tokens) > self._max_len:
+            caption_tokens = caption_tokens[:self._max_len-1]
+            caption_tokens.append(2)
+        #print(caption_tokens)
+
+
+        #caption = ' '.join(caption_tokens)
+        #print(caption)
+        #caption_tokens = self.prepare_target_tokens(caption_tokens)
         
         metadata = {'web_url': article['web_url'], 'image_path': image_path, 'caption':caption.strip(), 'article_id': sample['article_id']}
         image = self.preprocess(image)
@@ -140,16 +199,16 @@ class GoodNewsDataset:
     def __len__(self):
         return len(self.ids)
 
-def create_masks(src_batch: Tensor, tgt_batch: Tensor) -> Tuple[Tensor, Tensor]:
+def create_masks(src_batch: Tensor, tgt_batch: Tensor, pad_idx: int) -> Tuple[Tensor, Tensor]:
     # ----------------------------------------------------------------------
     # [1] padding mask
     # ----------------------------------------------------------------------
     
     # (batch_size, 1, max_tgt_seq_len)
-    src_pad_mask = (src_batch != PAD_IDX).unsqueeze(1)
+    src_pad_mask = (src_batch != pad_idx).unsqueeze(1)
     
     # (batch_size, 1, max_src_seq_len)
-    tgt_pad_mask = (tgt_batch != PAD_IDX).unsqueeze(1)
+    tgt_pad_mask = (tgt_batch != pad_idx).unsqueeze(1)
 
     # ----------------------------------------------------------------------
     # [2] subsequent mask for decoder inputs
@@ -186,10 +245,10 @@ def collate_fn(batch):
         metadata_batch.append(metadata)
 
     image_batch = torch.stack(image_batch)
-    target_batch = pad_sequence(target_tokens_list,padding_value=0,batch_first=True)
+    target_batch = pad_sequence(target_tokens_list,padding_value=1,batch_first=True)
     label_batch  = target_batch[:, 1:]
     target_batch = target_batch[:, :-1]
-    source_mask, target_mask = create_masks(target_batch, target_batch)
+    source_mask, target_mask = create_masks(target_batch, target_batch, pad_idx=1)
     #print('Batch Load:',time.time()-start)
     return [target_batch, target_mask, label_batch, image_batch, context_batch, ntokens, metadata_batch]
 
