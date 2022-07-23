@@ -75,22 +75,26 @@ class TransformerEntityPointerModel(LoadStateDictWithPrefix, Model):
         self.sample_history: Dict[str, float] = defaultdict(float)
         self.batch_history: Dict[str, float] = defaultdict(float)
 
-        self.entity_fc = GehringLinear(1024, 2)
-        self.entity_loss = nn.CrossEntropyLoss(ignore_index=-1)
-        self.copy_loss = nn.CrossEntropyLoss(ignore_index=-1)
+        #self.entity_fc = GehringLinear(1024, 2)
+        #self.p_gen = GehringLinear(1024, 1)
+        #self.pgen_wt_attn = nn.Parameter(torch.Tensor(6))
+        #nn.init.uniform_(self.pgen_wt_attn)
+
+        #self.entity_loss = nn.CrossEntropyLoss(ignore_index=-1)
+        #self.copy_loss = nn.CrossEntropyLoss(ignore_index=-1)
 
         # Copy-related modules
-        self.in_proj_weight = nn.Parameter(torch.empty(2 * 1024, 1024))
-        self.in_proj_bias = nn.Parameter(torch.empty(2 * 1024))
-        self.out_proj = GehringLinear(1024, 1024, bias=True)
-        self.bias_k = nn.Parameter(torch.empty(1, 1, 1024))
-        xavier_uniform_(self.in_proj_weight)
-        constant_(self.in_proj_bias, 0.)
-        xavier_normal_(self.bias_k)
+        #self.in_proj_weight = nn.Parameter(torch.empty(2 * 1024, 1024))
+        #self.in_proj_bias = nn.Parameter(torch.empty(2 * 1024))
+        #self.out_proj = GehringLinear(1024, 1024, bias=True)
+        #self.bias_k = nn.Parameter(torch.empty(1, 1, 1024))
+        #xavier_uniform_(self.in_proj_weight)
+        #constant_(self.in_proj_bias, 0.)
+        #xavier_normal_(self.bias_k)
 
         # Entity-related modules
-        self.entity_attn = SelfAttention(
-            out_channels=1024, embed_dim=1024, num_heads=16, gated=True)
+        #self.entity_attn = SelfAttention(
+        #    out_channels=1024, embed_dim=1024, num_heads=16, gated=True)
 
         initializer(self)
         self.vocab_size = vocab_size
@@ -115,7 +119,7 @@ class TransformerEntityPointerModel(LoadStateDictWithPrefix, Model):
         caption_ids, target_ids, contexts = self._forward(
             context, image, entity, caption)
         #print('-----------------Target shape',target_ids.shape)
-        decoder_out = self.decoder(caption, contexts)
+        decoder_out = self.decoder(caption, contexts, entity_tokens)
 
         #print('-----------------decoder out shape', decoder_out[0].shape)
         # Assume we're using adaptive loss
@@ -128,24 +132,28 @@ class TransformerEntityPointerModel(LoadStateDictWithPrefix, Model):
         orig = strip_pad(target_ids, self.padding_idx)
         sample_size= orig.numel()
 
-        entity_loss, copy_loss = self.pointer_loss(
-            decoder_out, context, caption, target_ids, entity, entity_tokens)
+        #final_dist = self.pointer_loss(
+        #    decoder_out, context, caption, target_ids, entity, entity_tokens)
+        #loss = F.cross_entropy(final_dist.contiguous().view(-1, final_dist.size(-1)),y.contiguous().view(-1),ignore_index=self.padding_idx,reduction="sum")
+
+        #entity_loss, copy_loss = self.pointer_loss(
+        #    decoder_out, context, caption, target_ids, entity, entity_tokens)
 
         gen_loss = gen_loss / sample_size / math.log(2)
-        entity_loss = entity_loss / math.log(2)
-        copy_loss = copy_loss / math.log(2)
+        #entity_loss = entity_loss / math.log(2)
+        #copy_loss = copy_loss / math.log(2)
 
-        loss = gen_loss + entity_loss + copy_loss
+        loss = gen_loss
 
         #if (self.training and not loss.requires_grad) or torch.isnan(loss):
         #    loss = None
 
-        if not torch.isnan(gen_loss):
-            self.batch_history['gen_loss'] += gen_loss.item()
-        if not torch.isnan(entity_loss):
-            self.batch_history['entity_loss'] += entity_loss.item()
-        if not torch.isnan(copy_loss):
-            self.batch_history['copy_loss'] += copy_loss.item()
+        #if not torch.isnan(gen_loss):
+        #    self.batch_history['gen_loss'] += gen_loss.item()
+        #if not torch.isnan(entity_loss):
+        #    self.batch_history['entity_loss'] += entity_loss.item()
+        #if not torch.isnan(copy_loss):
+        #    self.batch_history['copy_loss'] += copy_loss.item()
 
         output_dict = {
             'loss': loss,
@@ -189,22 +197,24 @@ class TransformerEntityPointerModel(LoadStateDictWithPrefix, Model):
 
         return output_dict
 
-    def pointer_loss(self, decoder_out, context, caption, caption_targets,
+    def pointer_dist(self, decoder_out, context, caption, caption_targets,
                      entity, entity_tokens):
         X = decoder_out[0]
+        attn = decoder_out[1]['attn']
+        p_inp = torch.stack([X, attn], dim=2)
         # X.shape == [batch_size, target_len, embed_size]
 
-        caption_copy_masks = caption[f'{self.index}_copy_masks']
-        caption_copy_masks = caption_copy_masks[:, 1:]
+        #caption_copy_masks = caption[f'{self.index}_copy_masks']
+        #caption_copy_masks = caption_copy_masks[:, 1:]
         # caption_copy_masks.shape == [batch_size, target_len]
 
-        return torch.tensor(0.0).to(X.device), torch.tensor(0.0).to(X.device)
-        if not caption_copy_masks[caption_copy_masks >= 1].bool().any():
-            return torch.tensor(0.0).to(X.device), torch.tensor(0.0).to(X.device)
+        #return torch.tensor(0.0).to(X.device), torch.tensor(0.0).to(X.device)
+        #if not caption_copy_masks[caption_copy_masks >= 1].bool().any():
+        #    return torch.tensor(0.0).to(X.device), torch.tensor(0.0).to(X.device)
 
 
-        ent_masks = torch.isnan(entity).any(dim=-1)
-        entity[ent_masks] = 0
+        #ent_masks = torch.isnan(entity).any(dim=-1)
+        #entity[ent_masks] = 0
 
         #context_copy_masks = context[f'{self.index}_proper_masks']
         # context_copy_masks.shape == [batch_size, source_len]

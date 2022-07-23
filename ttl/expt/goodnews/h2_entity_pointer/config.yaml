@@ -33,7 +33,7 @@ vocabulary:
 model:
   type: transformer_entity_pointer
   decoder:
-    type: dynamic_conv_decoder_entity
+    type: dynamic_conv_decoder_entity_pointer
     embedder:
       type: sum
       token_embedders:
@@ -59,8 +59,8 @@ model:
       allow_unmatched_keys: true
     max_target_positions: 512
     dropout: 0.1
-    #share_decoder_input_output_embed: true
-    share_decoder_input_output_embed: false
+    share_decoder_input_output_embed: true
+    #share_decoder_input_output_embed: false
     decoder_output_dim: 1024
     decoder_conv_dim: 1024
     decoder_glu: true
@@ -74,8 +74,8 @@ model:
     attention_dropout: 0.1
     decoder_ffn_embed_dim: 4096
     decoder_kernel_size_list: [3, 7, 15, 31]
-    #adaptive_softmax_cutoff: [5000, 20000]
-    adaptive_softmax_cutoff: None
+    adaptive_softmax_cutoff: [5000, 20000]
+    #adaptive_softmax_cutoff: None
     adaptive_softmax_factor: 1
     tie_adaptive_weights: true
     adaptive_softmax_dropout: 0

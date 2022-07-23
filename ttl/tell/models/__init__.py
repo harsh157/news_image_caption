@@ -4,6 +4,7 @@ from .decoder_faces_parallel import DynamicConvFacesParallelDecoder
 from .decoder_flattened_lstm import LSTMDecoder
 from .decoder_flattened_no_image import DynamicConvDecoderNoImage
 from .decoder_entity import DynamicConvDecoderEntity
+from .decoder_entity_pointer import DynamicConvDecoderEntityPointer
 from .transformer_faces import TransformerFacesModel
 from .transformer_faces_objects import TransformerFacesObjectModel
 from .transformer_flattened import TransformerFlattenedModel

@@ -146,7 +146,7 @@ class EntityPointerGoodNewsReader(DatasetReader):
             'caption': CopyTextField(caption_tokens, self._token_indexers, copy_infos, None, 'caption'),
             #'caption': TextField(caption_tokens, self._token_indexers),
             'entity': ArrayField(entities_vector, padding_value=np.nan),
-            'entity_tokens': ArrayField(np.array(ent_bpe), padding_value=np.nan)
+            'entity_tokens': ArrayField(np.array(ent_bpe), padding_value=1)
         }
 
         metadata = {'context': context,
