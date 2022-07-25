@@ -58,7 +58,7 @@ class TransformerEntityPointerModel(LoadStateDictWithPrefix, Model):
             'pytorch/fairseq:2f7e3f3323', 'roberta.large')
         self.use_context = use_context
         self.padding_idx = padding_value
-        self.criterion = nn.CrossEntropyLoss(ignore_index=self.padding_idx,reduction="sum")
+        #self.criterion = nn.CrossEntropyLoss(ignore_index=self.padding_idx,reduction="sum")
         self.evaluate_mode = evaluate_mode
         self.sampling_topk = sampling_topk
         self.sampling_temp = sampling_temp
@@ -116,10 +116,10 @@ class TransformerEntityPointerModel(LoadStateDictWithPrefix, Model):
                 metadata: List[Dict[str, Any]],
                 names=None) -> Dict[str, torch.Tensor]:
 
-        caption_ids, target_ids, contexts = self._forward(
+        caption_ids, target_ids, contexts, article_ids = self._forward(
             context, image, entity, caption)
         #print('-----------------Target shape',target_ids.shape)
-        decoder_out = self.decoder(caption, contexts, entity_tokens)
+        decoder_out = self.decoder(caption, contexts, entity_tokens, article_ids)
 
         #print('-----------------decoder out shape', decoder_out[0].shape)
         # Assume we're using adaptive loss
@@ -127,8 +127,13 @@ class TransformerEntityPointerModel(LoadStateDictWithPrefix, Model):
         #    self.decoder.adaptive_softmax, decoder_out, target_ids)
 
         x = decoder_out[0]
+        #print(torch.sum(torch.log(x.contiguous().view(-1, x.size(-1)))[0]))
+        #x = F.log_softmax(x, dim = 2)
         y = target_ids
-        gen_loss = self.criterion(x.contiguous().view(-1, x.size(-1)),y.contiguous().view(-1))
+        #gen_loss = F.cross_entropy(x.contiguous().view(-1, x.size(-1)),y.contiguous().view(-1),ignore_index=self.padding_idx, reduction="sum" )
+        gen_loss = F.nll_loss(x.contiguous().view(-1, x.size(-1)),y.contiguous().view(-1),ignore_index=self.padding_idx, reduction="sum" )
+        #gen_loss = F.cross_entropy(x.contiguous().view(-1, x.size(-1)),y.contiguous().view(-1),ignore_index=self.padding_idx, reduction="sum" )
+
         orig = strip_pad(target_ids, self.padding_idx)
         sample_size= orig.numel()
 
@@ -449,7 +454,7 @@ class TransformerEntityPointerModel(LoadStateDictWithPrefix, Model):
             'sections_mask': None,
         }
 
-        return caption_ids, target_ids, contexts
+        return caption_ids, target_ids, contexts, article_ids
 
 
 

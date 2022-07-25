@@ -115,10 +115,11 @@ iterator:
     - - caption
       - num_tokens
   batch_size: 12
-  max_instances_in_memory: 2000
+  max_instances_in_memory: 1000
   biggest_batch_first: false
   instances_per_epoch: 65536
   maximum_samples_per_batch: ["num_tokens", 16384]
+  #maximum_samples_per_batch: ["num_tokens", 16384]
 validation_iterator:
   type: bucket
   sorting_keys:

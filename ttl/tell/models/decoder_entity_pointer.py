@@ -98,7 +98,7 @@ class DynamicConvDecoderEntityPointer(Decoder):
         p_gen_input_size = input_embed_dim + output_embed_dim
         self.project_p_gens = GehringLinear(p_gen_input_size, 1)
 
-    def forward(self, prev_target, contexts, entity_tokens, incremental_state=None,
+    def forward(self, prev_target, contexts, entity_tokens, article_ids, incremental_state=None,
                 use_layers=None, **kwargs):
 
         # embed tokens and positions
@@ -149,10 +149,10 @@ class DynamicConvDecoderEntityPointer(Decoder):
 
         predictors = torch.cat((inp_embed, X), 2)
         p_gens = self.project_p_gens(predictors)
-        p_gens = torch.sigmoid(p_gens.float())
+        #p_gens = torch.sigmoid(p_gens.float())
         assert attn is not None
         #print('-----------attn shape', attn.shape)
-        X = self.output_layer(X, attn, entity_tokens, p_gens)
+        X = self.output_layer(X, attn, article_ids, p_gens)
 
 
         #print('-----------------X out shape', X.shape)
@@ -182,6 +182,7 @@ class DynamicConvDecoderEntityPointer(Decoder):
 
         # The final output distribution will be a mixture of the normal output
         # distribution (softmax of logits) and attention weights.
+        p_gens= torch.sigmoid(p_gens)
         gen_dists = self.get_normalized_probs_scriptable(
             logits, log_probs=False, sample=None
         )
@@ -191,28 +192,42 @@ class DynamicConvDecoderEntityPointer(Decoder):
         #padding_size = (batch_size, output_length, self.num_oov_types)
         #padding = gen_dists.new_zeros(padding_size)
         #gen_dists = torch.cat((gen_dists, padding), 2)
-        assert gen_dists.shape[2] == self.vocab_size
+        #assert gen_dists.shape[2] == self.vocab_size
 
         # Scatter attention distributions to distributions over the extended
         # vocabulary in a tensor of shape [batch_size, output_length,
         # vocab_size]. Each attention weight will be written into a location
         # that is for other dimensions the same as in the index tensor, but for
         # the third dimension it's the value of the index tensor (the token ID).
+        attn = attn[:, :, :-2]
         attn = torch.mul(attn.float(), 1 - p_gens)
+        #attn_lprob = F.log_softmax(attn, dim=2)
+        #attn = torch.mul(attn.float(), 1 - p_gens)
         #print('-------------ent tokens max:', torch.max(src_tokens))
+        #print('-------------attn:', attn.shape)
+        #print('-------------src:', src_tokens.shape)
         index = src_tokens[:, None, :]
         index = index.expand(batch_size, output_length, src_length)
         attn_dists_size = (batch_size, output_length, self.vocab_size)
         attn_dists = attn.new_zeros(attn_dists_size)
 
-        attn = attn[:, :, :-2]
         #print('-------------ent tokens:', index.shape)
         #print('-------------attn:', attn.shape)
         assert index.shape[2] == attn.shape[2]
-        attn_dists.scatter_add_(2, index.long(), attn.float())
+        assert index.shape[1] == attn.shape[1]
+        assert index.shape[0] == attn.shape[0]
+        attn_dists.scatter_add_(2, index.long(), attn)
 
+        #p_gens_1 = F.logsigmoid(p_gens)
+        #p_gens_2 = F.logsigmoid(-1.0*p_gens)
+        #log_probs = torch.cat([attn_dists])
+        #probs = gen_dists + attn_dists
+        probs = gen_dists + attn_dists
+        lprobs = probs.clamp(1e-10, 1.0).log()
+        #print("-------logprob check",probs.sum(dim = 2))
+        #print("-------logprob check",torch.exp(attn_dists).sum(dim = 2))
         # Final distributions, [batch_size, output_length, num_types].
-        return gen_dists + attn_dists
+        return lprobs
 
     def get_normalized_probs_scriptable(
         self,
@@ -397,7 +412,7 @@ class DynamicConvEntityPointerDecoderLayer(DecoderLayer):
             key_padding_mask=contexts['article_mask'],
             incremental_state=None,
             static_kv=True,
-            need_weights=(not self.training and self.need_attn))
+            need_weights=self.need_attn)
         X_article = F.dropout(X_article, p=self.dropout,
                               training=self.training)
         X_article = residual + X_article
@@ -410,14 +425,14 @@ class DynamicConvEntityPointerDecoderLayer(DecoderLayer):
         residual = X
         X_entity = self.maybe_layer_norm(
             self.context_attn_lns['entity'], X, before=True)
-        X_entity, attn = self.context_attns['entity'](
+        X_entity, _attn = self.context_attns['entity'](
             query=X_entity,
             key=contexts['entity'],
             value=contexts['entity'],
             key_padding_mask=contexts['entity_mask'],
             incremental_state=None,
             static_kv=True,
-            need_weights=self.need_attn)
+            need_weights=False)
         X_entity = F.dropout(X_entity, p=self.dropout,
                              training=self.training)
         X_entity = residual + X_entity

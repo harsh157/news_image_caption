@@ -95,15 +95,15 @@ class EntityPointerGoodNewsReader(DatasetReader):
             article = self.db.articles.find_one({
                 '_id': {'$eq': sample['article_id']},
             }, projection=['_id', 'context', 'images',
-                          'web_url', 'caption_ner', 'context_ner',
-                          'context_parts_of_speech', 'caption_parts_of_speech'])
-            named_entities = sorted(self._get_named_entities(article))
+                          'web_url',
+                          ])
+            #named_entities = sorted(self._get_named_entities(article))
 
-            copy_infos = self._get_caption_names(
-                article, sample['image_index'])
+            #copy_infos = self._get_caption_names(
+            #    article, sample['image_index'])
 
-            self._process_copy_tokens(copy_infos, article)
-            proper_infos = self._get_context_names(article)
+            #self._process_copy_tokens(copy_infos, article)
+            #proper_infos = self._get_context_names(article)
 
 
             # Load the image
@@ -128,9 +128,9 @@ class EntityPointerGoodNewsReader(DatasetReader):
                 err += 1
                 continue
 
-            yield self.article_to_instance(article, image, named_entities, sample['image_index'], image_path, entities, copy_infos, proper_infos, entities_vector)
+            yield self.article_to_instance(article, image, sample['image_index'], image_path, entities, entities_vector)
 
-    def article_to_instance(self, article, image, named_entities, image_index, image_path, entities, copy_infos, proper_infos, entities_vector) -> Instance:
+    def article_to_instance(self, article, image, image_index, image_path, entities, entities_vector) -> Instance:
         context = ' '.join(article['context'].strip().split(' ')[:500])
 
         caption = article['images'][image_index]
@@ -139,12 +139,14 @@ class EntityPointerGoodNewsReader(DatasetReader):
         context_tokens = self._tokenizer.tokenize(context)
         caption_tokens = self._tokenizer.tokenize(caption)
         ent_bpe, ent_metadata = self.getEntityEmbed(entities)
+        entities_vector = entities_vector[:100]
+        ent_bpe = ent_bpe[:100]
 
         fields = {
             'context': TextField(context_tokens, self._context_token_indexers),
             'image': ImageField(image, self.preprocess),
-            'caption': CopyTextField(caption_tokens, self._token_indexers, copy_infos, None, 'caption'),
-            #'caption': TextField(caption_tokens, self._token_indexers),
+            #'caption': CopyTextField(caption_tokens, self._token_indexers, copy_infos, None, 'caption'),
+            'caption': TextField(caption_tokens, self._context_token_indexers),
             'entity': ArrayField(entities_vector, padding_value=np.nan),
             'entity_tokens': ArrayField(np.array(ent_bpe), padding_value=1)
         }
