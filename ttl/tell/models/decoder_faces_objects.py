@@ -96,6 +96,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                 use_layers=None, **kwargs):
         # embed tokens and positions
         X = self.embedder(prev_target, incremental_state=incremental_state)
+        inp_embed = X
 
         # if incremental_state is not None:
         #     X = X[:, -1:]
@@ -109,7 +110,8 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         X = X.transpose(0, 1)
         attns = []
 
-        inner_states = [X]
+        inner_states = []
+        #inner_states = [X]
 
         # decoder layers
         for i, layer in enumerate(self.layers):
@@ -120,7 +122,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                     incremental_state,
                 )
                 inner_states.append(X)
-            attns.append(attn)
+            #attns.append(attn)
 
         if self.normalize:
             X = self.layer_norm(X)
@@ -139,7 +141,33 @@ class DynamicConvFacesObjectsDecoder(Decoder):
             else:
                 X = F.linear(X, self.embed_out)
 
-        return X, {'attn': attns, 'inner_states': inner_states}
+        predictors = torch.cat((inp_embed, X), 2)
+        return X, {'attn': attn, 'inner_states': inner_states, 'predictors':predictors}
+        #return X, {'attn': attns, 'inner_states': inner_states}
+
+    def get_normalized_probs_scriptable(
+        self,
+        net_output: torch.Tensor,
+        log_probs: bool,
+        sample = None
+    ):
+        """Get normalized probabilities (or log probs) from a net's output."""
+
+        if hasattr(self, "adaptive_softmax") and self.adaptive_softmax is not None:
+            if sample is not None:
+                assert "target" in sample
+                target = sample["target"]
+            else:
+                target = None
+            out = self.adaptive_softmax.get_log_prob(net_output, target=target)
+            return out.exp_() if not log_probs else out
+
+        logits = net_output
+        if log_probs:
+            return utils.log_softmax(logits, dim=-1, onnx_trace=self.onnx_trace)
+        else:
+            return utils.softmax(logits, dim=-1, onnx_trace=self.onnx_trace)
+
 
     def max_positions(self):
         """Maximum output length supported by the decoder."""
@@ -285,8 +313,8 @@ class DynamicConvDecoderLayer(DecoderLayer):
         X_image = self.maybe_layer_norm(
             self.context_attn_lns['image'], X_image, after=True)
         X_contexts.append(X_image)
-        if attn is not None:
-            attns['image'] = attn.cpu().detach().numpy()
+        #if attn is not None:
+        #    attns['image'] = attn.cpu().detach().numpy()
 
         # Article attention
         residual = X
@@ -299,21 +327,21 @@ class DynamicConvDecoderLayer(DecoderLayer):
             key_padding_mask=contexts['article_mask'],
             incremental_state=None,
             static_kv=True,
-            need_weights=(not self.training and self.need_attn))
+            need_weights=True)
         X_article = F.dropout(X_article, p=self.dropout,
                               training=self.training)
         X_article = residual + X_article
         X_article = self.maybe_layer_norm(
             self.context_attn_lns['article'], X_article, after=True)
         X_contexts.append(X_article)
-        if attn is not None:
-            attns['article'] = attn.cpu().detach().numpy()
+        #if attn is not None:
+        #    attns['article'] = attn.cpu().detach().numpy()
 
         # Face attention
         residual = X
         X_faces = self.maybe_layer_norm(
             self.context_attn_lns['faces'], X, before=True)
-        X_faces, attn = self.context_attns['faces'](
+        X_faces, _attn = self.context_attns['faces'](
             query=X_faces,
             key=contexts['faces'],
             value=contexts['faces'],
@@ -327,14 +355,14 @@ class DynamicConvDecoderLayer(DecoderLayer):
         X_faces = self.maybe_layer_norm(
             self.context_attn_lns['faces'], X_faces, after=True)
         X_contexts.append(X_faces)
-        if attn is not None:
-            attns['faces'] = attn.cpu().detach().numpy()
+        #if attn is not None:
+        #    attns['faces'] = attn.cpu().detach().numpy()
 
         # Object attention
         residual = X
         X_objs = self.maybe_layer_norm(
             self.context_attn_lns['obj'], X, before=True)
-        X_objs, attn = self.context_attns['obj'](
+        X_objs, _attn = self.context_attns['obj'](
             query=X_objs,
             key=contexts['obj'],
             value=contexts['obj'],
@@ -348,8 +376,8 @@ class DynamicConvDecoderLayer(DecoderLayer):
         X_objs = self.maybe_layer_norm(
             self.context_attn_lns['obj'], X_objs, after=True)
         X_contexts.append(X_objs)
-        if attn is not None:
-            attns['obj'] = attn.cpu().detach().numpy()
+        #if attn is not None:
+        #    attns['obj'] = attn.cpu().detach().numpy()
 
         X_context = torch.cat(X_contexts, dim=-1)
         X = self.context_fc(X_context)
@@ -362,7 +390,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
         X = F.dropout(X, p=self.dropout, training=self.training)
         X = residual + X
         X = self.maybe_layer_norm(self.final_layer_norm, X, after=True)
-        return X, attns
+        return X, attn
 
     def maybe_layer_norm(self, layer_norm, X, before=False, after=False):
         assert before ^ after

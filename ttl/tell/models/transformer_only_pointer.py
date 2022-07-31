@@ -74,7 +74,9 @@ class TransformerOnlyPointerModel(LoadStateDictWithPrefix, Model):
         self.n_samples = 0
         self.sample_history: Dict[str, float] = defaultdict(float)
         self.batch_history: Dict[str, float] = defaultdict(float)
-        self.project_p_gens = GehringLinear(2048, 1)
+        self.project_first_p_gens = GehringLinear(2048, 1024, dropout=0.1)
+        self.project_p_gens = GehringLinear(1024, 1)
+        self.relu_dropout = 0.1
 
         #self.entity_fc = GehringLinear(1024, 2)
         #self.p_gen = GehringLinear(1024, 1)
@@ -214,7 +216,9 @@ class TransformerOnlyPointerModel(LoadStateDictWithPrefix, Model):
         #if self.adaptive_softmax is None:
         #    logits = self.output_projection(features)
         #else:
-        p_gens = self.project_p_gens(X[1]['predictors'])
+        p_gens = F.relu(self.project_first_p_gens(X[1]['predictors']))
+        p_gens = F.dropout(p_gens, p=self.relu_dropout, training=self.training)
+        p_gens = self.project_p_gens(p_gens)
         logits = X[0]
         attn = X[1]['attn']
 

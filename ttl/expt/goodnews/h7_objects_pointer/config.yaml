@@ -1,5 +1,5 @@
 dataset_reader:
-  type: goodnews_flattened
+  type: goodnews_face_ner_matched
   tokenizer:
     type: word
     word_splitter: just_spaces_keep_newlines
@@ -14,6 +14,8 @@ dataset_reader:
   image_dir: /home/jupyter/data/GoodNews/goodnews/images_processed
   eval_limit: 5120
   lazy: true
+  use_caption_names: false
+  use_objects: true
 train_data_path: train
 validation_data_path: val
 test_data_path: test
@@ -21,10 +23,10 @@ vocabulary:
   type: roberta
   directory_path: ./expt/vocabulary
 model:
-  type: transformer_only_pointer
-  model_path: ./expt/goodnews/5_transformer_roberta/best.th
+  type: transformer_objects_pointer
+  model_path: /home/jupyter/data/GoodNews/expt/goodnews/9_transformer_objects/serialization/best.th
   decoder:
-    type: dynamic_conv_decoder_flattened
+    type: dynamic_conv_decoder_faces_objects
     embedder:
       type: sum
       token_embedders:
@@ -51,7 +53,6 @@ model:
     max_target_positions: 512
     dropout: 0.1
     share_decoder_input_output_embed: true
-    #share_decoder_input_output_embed: false
     decoder_output_dim: 1024
     decoder_conv_dim: 1024
     decoder_glu: true
@@ -66,7 +67,6 @@ model:
     decoder_ffn_embed_dim: 4096
     decoder_kernel_size_list: [3, 7, 15, 31]
     adaptive_softmax_cutoff: [5000, 20000]
-    #adaptive_softmax_cutoff: None
     adaptive_softmax_factor: 1
     tie_adaptive_weights: true
     adaptive_softmax_dropout: 0
@@ -87,7 +87,7 @@ model:
   attention_dim: 1024
   namespace: bpe
   index: roberta
-  weigh_bert: false
+  weigh_bert: true
   padding_value: 1
   # initializer:
   #   - - ^(attention|article_attention|init|f).*weight
@@ -110,7 +110,6 @@ iterator:
   biggest_batch_first: false
   instances_per_epoch: 65536
   maximum_samples_per_batch: ["num_tokens", 16384]
-  #maximum_samples_per_batch: ["num_tokens", 16384]
 validation_iterator:
   type: bucket
   sorting_keys:
@@ -118,22 +117,20 @@ validation_iterator:
       - num_tokens
     - - caption
       - num_tokens
-  batch_size: 10
-  max_instances_in_memory: 1000
+  batch_size: 16
+  max_instances_in_memory: 6000
   maximum_samples_per_batch: ["num_tokens", 16384]
   biggest_batch_first: false
 trainer:
   type: callback_apex
   apex_opt_level: O2
-  #apex_opt_level: O1
-  #keep_batchnorm_fp32: None
   keep_batchnorm_fp32: true
   optimizer:
     type: bert_adam
-    lr: 0.00005
+    lr: 0.0001
     warmup: 0.05
+    #t_total: 437600 # Takees 43m to go through 4376 batches per epoch
     t_total: 131280 # Takees 43m to go through 4376 batches per epoch
-    #t_total: 65640 # Takees 43m to go through 4376 batches per epoch
     schedule: warmup_linear
     b1: 0.9
     b2: 0.98

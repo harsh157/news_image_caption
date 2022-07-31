@@ -22,7 +22,7 @@ vocabulary:
   directory_path: ./expt/vocabulary
 model:
   type: transformer_only_pointer
-  model_path: ./expt/goodnews/5_transformer_roberta/best.th
+  model_path: /home/jupyter/data/GoodNews/expt/goodnews/6_transformer_weighted_roberta/serialization/best.th
   decoder:
     type: dynamic_conv_decoder_flattened
     embedder:
@@ -87,7 +87,7 @@ model:
   attention_dim: 1024
   namespace: bpe
   index: roberta
-  weigh_bert: false
+  weigh_bert: true
   padding_value: 1
   # initializer:
   #   - - ^(attention|article_attention|init|f).*weight

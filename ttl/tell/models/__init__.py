@@ -16,3 +16,5 @@ from .transformer_entity import TransformerEntityModel
 from .transformer_entity_pointer import TransformerEntityPointerModel
 from .transformer_context_pointer import TransformerContextPointerModel
 from .transformer_only_pointer import TransformerOnlyPointerModel
+from .transformer_faces_pointer import TransformerFacesPointerModel
+from .transformer_objects_pointer import TransformerObjectsPointerModel

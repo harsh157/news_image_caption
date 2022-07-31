@@ -11,7 +11,7 @@ dataset_reader:
       padding_on_right: true
       padding_value: 1
       max_len: 512
-  image_dir: data/goodnews/images_processed
+  image_dir: /home/jupyter/data/GoodNews/goodnews/images_processed
   eval_limit: 5120
   lazy: true
   use_caption_names: false
@@ -104,7 +104,7 @@ iterator:
     - - caption
       - num_tokens
   batch_size: 16
-  max_instances_in_memory: 8192
+  max_instances_in_memory: 6000
   biggest_batch_first: false
   instances_per_epoch: 65536
   maximum_samples_per_batch: ["num_tokens", 16384]
@@ -116,7 +116,7 @@ validation_iterator:
     - - caption
       - num_tokens
   batch_size: 16
-  max_instances_in_memory: 8192
+  max_instances_in_memory: 6000
   maximum_samples_per_batch: ["num_tokens", 16384]
   biggest_batch_first: false
 trainer:
