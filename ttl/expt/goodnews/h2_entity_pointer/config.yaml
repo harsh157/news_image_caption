@@ -96,7 +96,7 @@ model:
   attention_dim: 1024
   namespace: bpe
   index: roberta
-  weigh_bert: false
+  weigh_bert: true
   padding_value: 1
   # initializer:
   #   - - ^(attention|article_attention|init|f).*weight
@@ -114,7 +114,7 @@ iterator:
       - num_tokens
     - - caption
       - num_tokens
-  batch_size: 12
+  batch_size: 10
   max_instances_in_memory: 1000
   biggest_batch_first: false
   instances_per_epoch: 65536
@@ -134,11 +134,13 @@ validation_iterator:
 trainer:
   type: callback_apex
   #apex_opt_level: O2
-  apex_opt_level: O2
-  keep_batchnorm_fp32: true
+  apex_opt_level: O1
+  #keep_batchnorm_fp32: true
+  keep_batchnorm_fp32: None
   optimizer:
     type: bert_adam
-    lr: 0.0001
+    lr: 0.00001
+    #lr: 0.0001
     warmup: 0.05
     t_total: 437600 # Takees 43m to go through 4376 batches per epoch
     schedule: warmup_linear

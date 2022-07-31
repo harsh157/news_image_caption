@@ -111,7 +111,8 @@ class DynamicConvDecoderEntity(Decoder):
         X = X.transpose(0, 1)
         attn = None
 
-        inner_states = [X]
+        inner_states = []
+        #inner_states = [X]
 
         # decoder layers
         for i, layer in enumerate(self.layers):
@@ -121,7 +122,7 @@ class DynamicConvDecoderEntity(Decoder):
                     contexts,
                     incremental_state,
                 )
-                inner_states.append(X)
+                #inner_states.append(X)
 
         if self.normalize:
             X = self.layer_norm(X)

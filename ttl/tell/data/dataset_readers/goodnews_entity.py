@@ -50,6 +50,8 @@ class EntityGoodNewsReader(DatasetReader):
                  mongo_host: str = 'localhost',
                  mongo_port: int = 27017,
                  eval_limit: int = 5120,
+                 filter_entities_groups: bool = False,
+                 entity_limit: int = 100,
                  lazy: bool = True) -> None:
         super().__init__(lazy)
         self._tokenizer = tokenizer
@@ -65,6 +67,8 @@ class EntityGoodNewsReader(DatasetReader):
         self.eval_limit = eval_limit
         random.seed(1234)
         self.rs = np.random.RandomState(1234)
+        self.filter_entities_groups = filter_entities_groups
+        self.max_entity_size = entity_limit
 
     @overrides
     def _read(self, split: str):
@@ -95,6 +99,7 @@ class EntityGoodNewsReader(DatasetReader):
             # Load the image
             image_path = os.path.join(self.image_dir, f"{sample['_id']}.jpg")
             entity_path = os.path.join(self.entity_embed_dir, f"{sample['article_id']}.pkl")
+            entity_vec_path = os.path.join(self.entity_embed_dir, f"{sample['article_id']}.npy")
             try:
                 image = Image.open(image_path)
             except (FileNotFoundError, OSError):
@@ -105,13 +110,17 @@ class EntityGoodNewsReader(DatasetReader):
                     entities = pkl.load(efile)
                 if len(entities) == 0:
                     continue
+                if 'bpe_tok' not in entities[0]:
+                    continue
+                with open(entity_vec_path, 'rb') as efile:
+                    entities_vector = np.load(efile)
             except (FileNotFoundError, OSError):
                 err += 1
                 continue
 
-            yield self.article_to_instance(article, image, sample['image_index'], image_path, entities)
+            yield self.article_to_instance(article, image, sample['image_index'], image_path, entities, entities_vector)
 
-    def article_to_instance(self, article, image, image_index, image_path, entities) -> Instance:
+    def article_to_instance(self, article, image, image_index, image_path, entities, entities_vector) -> Instance:
         context = ' '.join(article['context'].strip().split(' ')[:500])
 
         caption = article['images'][image_index]
@@ -119,7 +128,7 @@ class EntityGoodNewsReader(DatasetReader):
 
         context_tokens = self._tokenizer.tokenize(context)
         caption_tokens = self._tokenizer.tokenize(caption)
-        ent_features, ent_bpe, ent_metadata = self.getEntityEmbed(entities) 
+        ent_features, ent_bpe, ent_metadata = self.getEntityEmbed(entities, entities_vector) 
 
         fields = {
             'context': TextField(context_tokens, self._token_indexers),
@@ -138,17 +147,32 @@ class EntityGoodNewsReader(DatasetReader):
 
         return Instance(fields)
 
-    def getEntityEmbed(self,ent_list):
+    def getEntityEmbed(self,ent_list, entities_vector):
         ent_features = []
         ent_bpe = []
         metadata = []
-        for ent in ent_list:
-            vec = ent['vector']
-            if len(vec) != 1024:
-                continue
-            ent_features.append(ent['vector'])
-            #ent_bpe.append(ent['bpe_tok'])
+        ent_group = ['PERSON', 'ORG', 'GPE', 'DATE']
+        idxs = []
+        for ind, ent in enumerate(ent_list):
+            #if len(metadata) > self.max_entity_size:
+            #    break
+            if self.filter_entities_groups and ent['ent_type'] in ent_group:
+                idxs.append(ind)
+            #print(ent['ent_type'])
+            vec = entities_vector[ind]
+            #if len(vec) != 1024:
+            #    continue
+            ent_features.append(vec)
+            ent_bpe.append(ent['bpe_tok'])
             metadata.append({'ent_type':ent['ent_type'], 'word': ent['word']})
 
+        if len(idxs) > 5:
+            ent_features = [ent_features[idx] for idx in idxs]
+            ent_bpe = [ent_bpe[idx] for idx in idxs]
+            metadata = [metadata[idx] for idx in idxs]
+
+        ent_features = ent_features[:self.max_entity_size]
+        ent_bpe = ent_bpe[:self.max_entity_size]
+        metadata = metadata[:self.max_entity_size]
         return np.array(ent_features), ent_bpe, metadata
 

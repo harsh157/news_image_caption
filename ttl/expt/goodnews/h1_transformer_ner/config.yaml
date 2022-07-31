@@ -14,6 +14,8 @@ dataset_reader:
   image_dir: /home/jupyter/data/GoodNews/goodnews/images_processed
   entity_embed_dir: /home/jupyter/data/GoodNews/entity_embeddings/embeddings
   eval_limit: 5120
+  filter_entities_groups: true
+  entity_limit: 100
   lazy: true
 train_data_path: train
 validation_data_path: val
@@ -104,7 +106,7 @@ iterator:
     - - caption
       - num_tokens
   batch_size: 16
-  max_instances_in_memory: 3000
+  max_instances_in_memory: 5000
   biggest_batch_first: false
   instances_per_epoch: 65536
   maximum_samples_per_batch: ["num_tokens", 16384]
