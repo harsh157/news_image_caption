@@ -269,6 +269,8 @@ class TransformerEntityModel(Model):
                 'image_mask': contexts['image_mask'][full_active_idx],
                 'article': contexts['article'][:, full_active_idx],
                 'article_mask': contexts['article_mask'][full_active_idx],
+                'entity': contexts['entity'][:, full_active_idx],
+                'entity_mask': contexts['entity_mask'][full_active_idx],
                 'sections':  None,
                 'sections_mask': None,
             }
