@@ -108,10 +108,6 @@ class EntityGoodNewsReader(DatasetReader):
             try:
                 with open(entity_path, 'rb') as efile:
                     entities = pkl.load(efile)
-                if len(entities) == 0:
-                    continue
-                if 'bpe_tok' not in entities[0]:
-                    continue
                 with open(entity_vec_path, 'rb') as efile:
                     entities_vector = np.load(efile)
             except (FileNotFoundError, OSError):
@@ -129,12 +125,19 @@ class EntityGoodNewsReader(DatasetReader):
         context_tokens = self._tokenizer.tokenize(context)
         caption_tokens = self._tokenizer.tokenize(caption)
         ent_features, ent_bpe, ent_metadata = self.getEntityEmbed(entities, entities_vector) 
+        ent_bpe = np.array(ent_bpe)
+        if len(ent_features) == 0 or len(ent_bpe) == 0:
+            ent_features = np.array([[]])
+            ent_bpe = np.array([])
+        #print(ent_features.shape)
+        #print(ent_bpe.shape)
 
         fields = {
             'context': TextField(context_tokens, self._token_indexers),
             'image': ImageField(image, self.preprocess),
             'caption': TextField(caption_tokens, self._token_indexers),
-            'entity': ArrayField(ent_features, padding_value=np.nan)
+            'entity': ArrayField(ent_features, padding_value=np.nan),
+            'entity_tokens': ArrayField(ent_bpe, padding_value=1)
         }
 
         metadata = {'context': context,
@@ -151,9 +154,12 @@ class EntityGoodNewsReader(DatasetReader):
         ent_features = []
         ent_bpe = []
         metadata = []
-        ent_group = ['PERSON', 'ORG', 'GPE', 'DATE']
+        ent_group = ['PERSON', 'NORP', 'ORG', 'DATE', 'TIME', 'FAC',
+                'GPE', 'LOC', 'PRODUCT', 'EVENT', 'ART']
         idxs = []
         for ind, ent in enumerate(ent_list):
+            if 'bpe_tok' not in ent:
+                return np.array([]), [], []
             #if len(metadata) > self.max_entity_size:
             #    break
             if self.filter_entities_groups and ent['ent_type'] in ent_group:
@@ -166,10 +172,10 @@ class EntityGoodNewsReader(DatasetReader):
             ent_bpe.append(ent['bpe_tok'])
             metadata.append({'ent_type':ent['ent_type'], 'word': ent['word']})
 
-        if len(idxs) > 5:
-            ent_features = [ent_features[idx] for idx in idxs]
-            ent_bpe = [ent_bpe[idx] for idx in idxs]
-            metadata = [metadata[idx] for idx in idxs]
+        #if len(idxs) > 5:
+        ent_features = [ent_features[idx] for idx in idxs]
+        ent_bpe = [ent_bpe[idx] for idx in idxs]
+        metadata = [metadata[idx] for idx in idxs]
 
         ent_features = ent_features[:self.max_entity_size]
         ent_bpe = ent_bpe[:self.max_entity_size]
