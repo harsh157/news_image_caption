@@ -5,29 +5,27 @@
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
 
-
+import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from allennlp.modules.text_field_embedders import TextFieldEmbedder
-
 from tell.modules import (AdaptiveSoftmax, DynamicConv1dTBC, GehringLinear,
                           LightweightConv1dTBC, MultiHeadAttention)
 from tell.modules.token_embedders import AdaptiveEmbedding
 from tell.utils import eval_str_list, fill_with_neg_inf, softmax
+from tell.models.decoder_base import Decoder, DecoderLayer
 
-from .decoder_base import Decoder, DecoderLayer
 
-
-@Decoder.register('dynamic_conv_decoder_entity_pointer')
-class DynamicConvDecoderEntityPointer(Decoder):
+@Decoder.register('decoder_tgnc')
+class DecoderTGNC(Decoder):
     def __init__(self, vocab, embedder: TextFieldEmbedder, max_target_positions, dropout,
                  share_decoder_input_output_embed,
                  decoder_output_dim, decoder_conv_dim, decoder_glu,
                  decoder_conv_type, weight_softmax, decoder_attention_heads,
                  weight_dropout, relu_dropout, input_dropout,
                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
-                 decoder_kernel_size_list, adaptive_softmax_cutoff=None,
+                 decoder_kernel_size_list=[3, 7, 15, 31], adaptive_softmax_cutoff=None,
                  tie_adaptive_weights=False, adaptive_softmax_dropout=0,
                  tie_adaptive_proj=False, adaptive_softmax_factor=0, decoder_layers=6,
                  final_norm=True, padding_idx=0, namespace='target_tokens',
@@ -41,9 +39,8 @@ class DynamicConvDecoderEntityPointer(Decoder):
         input_embed_dim = embedder.get_output_dim()
         embed_dim = input_embed_dim
         output_embed_dim = input_embed_dim
-
-        padding_idx = padding_idx
         self.max_target_positions = max_target_positions
+        self.sigmoid = nn.Sigmoid()
 
         self.embedder = embedder
 
@@ -52,14 +49,59 @@ class DynamicConvDecoderEntityPointer(Decoder):
 
         self.layers = nn.ModuleList([])
         self.layers.extend([
-            DynamicConvEntityPointerDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
-                                    decoder_conv_type, weight_softmax, decoder_attention_heads,
-                                    weight_dropout, dropout, relu_dropout, input_dropout,
-                                    decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
-                                    article_embed_size,
-                                    kernel_size=decoder_kernel_size_list[i])
+            DynamicConvTGNCDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
+                                        decoder_conv_type, weight_softmax, decoder_attention_heads,
+                                        weight_dropout, dropout, relu_dropout, input_dropout,
+                                        decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
+                                        article_embed_size,
+                                        kernel_size=decoder_kernel_size_list[i])
             for i in range(decoder_layers)
         ])
+
+        self.head0 = nn.ModuleList([])
+        self.head0.extend([
+            DynamicConvTGNCDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
+                                        decoder_conv_type, weight_softmax, decoder_attention_heads,
+                                        weight_dropout, dropout, relu_dropout, input_dropout,
+                                        decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
+                                        article_embed_size,
+                                        kernel_size=31)])
+
+        self.head1 = nn.ModuleList([])
+        self.head1.extend([
+            DynamicConvTGNCDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
+                                        decoder_conv_type, weight_softmax, decoder_attention_heads,
+                                        weight_dropout, dropout, relu_dropout, input_dropout,
+                                        decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
+                                        article_embed_size,
+                                        kernel_size=31)])
+
+        self.head2 = nn.ModuleList([])
+        self.head2.extend([
+            DynamicConvTGNCDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
+                                        decoder_conv_type, weight_softmax, decoder_attention_heads,
+                                        weight_dropout, dropout, relu_dropout, input_dropout,
+                                        decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
+                                        article_embed_size,
+                                        kernel_size=31)])
+
+        self.head3 = nn.ModuleList([])
+        self.head3.extend([
+            DynamicConvTGNCDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
+                                        decoder_conv_type, weight_softmax, decoder_attention_heads,
+                                        weight_dropout, dropout, relu_dropout, input_dropout,
+                                        decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
+                                        article_embed_size,
+                                        kernel_size=31)])
+
+        self.head4 = nn.ModuleList([])
+        self.head4.extend([
+            DynamicConvTGNCDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
+                                        decoder_conv_type, weight_softmax, decoder_attention_heads,
+                                        weight_dropout, dropout, relu_dropout, input_dropout,
+                                        decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
+                                        article_embed_size,
+                                        kernel_size=31)])
 
         self.adaptive_softmax = None
 
@@ -98,10 +140,6 @@ class DynamicConvDecoderEntityPointer(Decoder):
 
         # embed tokens and positions
         X = self.embedder(prev_target, incremental_state=incremental_state)
-        inp_embed = X
-
-        # if incremental_state is not None:
-        #     X = X[:, -1:]
 
         if self.project_in_dim is not None:
             X = self.project_in_dim(X)
@@ -112,8 +150,7 @@ class DynamicConvDecoderEntityPointer(Decoder):
         X = X.transpose(0, 1)
         attn = None
 
-        inner_states = []
-        #inner_states = [X]
+        inner_states = [X]
 
         # decoder layers
         for i, layer in enumerate(self.layers):
@@ -123,54 +160,88 @@ class DynamicConvDecoderEntityPointer(Decoder):
                     contexts,
                     incremental_state,
                 )
-                #inner_states.append(X)
+                inner_states.append(X)
+
+        X0, attn0 = self.head0[0](
+            X,
+            contexts,
+            incremental_state,
+        )
 
         if self.normalize:
-            X = self.layer_norm(X)
+            X0 = self.layer_norm(X0)
 
         # T x B x C -> B x T x C
-        X = X.transpose(0, 1)
+        X0 = X0.transpose(0, 1)
 
-        #print('-----------------X out shape', X.shape)
         if self.project_out_dim is not None:
-            X = self.project_out_dim(X)
+            X0 = self.project_out_dim(X0)
 
-        if self.adaptive_softmax is None:
-            # project back to size of vocabulary
-            if self.share_input_output_embed:
-                X = F.linear(
-                    X, self.embedder.token_embedder_bert.word_embeddings.weight)
-            else:
-                X = F.linear(X, self.embed_out)
+        X1, attn1 = self.head1[0](
+            X,
+            contexts,
+            incremental_state,
+        )
 
-        #print('-----------------X out shape', X.shape)
-        #return X, {'attn': attn, 'inner_states': inner_states}
-        predictors = torch.cat((inp_embed, X), 2)
-        return X, {'attn': attn, 'inner_states': inner_states, 'predictors':predictors}
+        if self.normalize:
+            X1 = self.layer_norm(X1)
 
-    def get_normalized_probs_scriptable(
-        self,
-        net_output: torch.Tensor,
-        log_probs: bool,
-        sample = None
-    ):
-        """Get normalized probabilities (or log probs) from a net's output."""
+        # T x B x C -> B x T x C
+        X1 = X1.transpose(0, 1)
 
-        if hasattr(self, "adaptive_softmax") and self.adaptive_softmax is not None:
-            if sample is not None:
-                assert "target" in sample
-                target = sample["target"]
-            else:
-                target = None
-            out = self.adaptive_softmax.get_log_prob(net_output, target=target)
-            return out.exp_() if not log_probs else out
+        if self.project_out_dim is not None:
+            X1 = self.project_out_dim(X1)
 
-        logits = net_output
-        if log_probs:
-            return utils.log_softmax(logits, dim=-1, onnx_trace=self.onnx_trace)
-        else:
-            return utils.softmax(logits, dim=-1, onnx_trace=self.onnx_trace)
+        X2, attn2 = self.head2[0](
+            X,
+            contexts,
+            incremental_state,
+        )
 
+        if self.normalize:
+            X2 = self.layer_norm(X2)
+
+        # T x B x C -> B x T x C
+        X2 = X2.transpose(0, 1)
+
+        if self.project_out_dim is not None:
+            X2 = self.project_out_dim(X2)
+
+        X3, attn3 = self.head3[0](
+            X,
+            contexts,
+            incremental_state,
+        )
+
+        if self.normalize:
+            X3 = self.layer_norm(X3)
+
+        # T x B x C -> B x T x C
+        X3 = X3.transpose(0, 1)
+
+        if self.project_out_dim is not None:
+            X3 = self.project_out_dim(X3)
+
+        X4, attn4 = self.head4[0](
+            X,
+            contexts,
+            incremental_state,
+        )
+
+        if self.normalize:
+            X4 = self.layer_norm(X4)
+
+        # T x B x C -> B x T x C
+        X4 = X4.transpose(0, 1)
+
+        if self.project_out_dim is not None:
+            X4 = self.project_out_dim(X4)
+
+        prob = self.sigmoid(contexts['template_logits'])
+        X = torch.stack([X0, X1, X2, X3, X4], dim=2)
+        X = X * prob.unsqueeze(1).unsqueeze(3)
+        X = X.mean(dim=2)
+        return X, prob
 
     def max_positions(self):
         """Maximum output length supported by the decoder."""
@@ -211,8 +282,8 @@ class DynamicConvDecoderEntityPointer(Decoder):
                 incremental_state[key] = incremental_state[key][:, active_idx]
 
 
-@DecoderLayer.register('dynamic_conv_entity_pointer')
-class DynamicConvEntityPointerDecoderLayer(DecoderLayer):
+@DecoderLayer.register('dynamic_conv_tgnc')
+class DynamicConvTGNCDecoderLayer(DecoderLayer):
     def __init__(self, decoder_embed_dim, decoder_conv_dim, decoder_glu,
                  decoder_conv_type, weight_softmax, decoder_attention_heads,
                  weight_dropout, dropout, relu_dropout, input_dropout,
@@ -262,13 +333,7 @@ class DynamicConvEntityPointerDecoderLayer(DecoderLayer):
             dropout=attention_dropout)
         self.context_attn_lns['article'] = nn.LayerNorm(self.embed_dim)
 
-        entity_embed_size = 1024
-        self.context_attns['entity'] = MultiHeadAttention(
-                self.embed_dim, decoder_attention_heads, kdim=entity_embed_size,
-                vdim=entity_embed_size,dropout=attention_dropout)
-        self.context_attn_lns['entity'] = nn.LayerNorm(self.embed_dim)
-
-        context_size = self.embed_dim * 3
+        context_size = self.embed_dim * 2
 
         self.context_fc = GehringLinear(context_size, self.embed_dim)
 
@@ -340,25 +405,6 @@ class DynamicConvEntityPointerDecoderLayer(DecoderLayer):
             self.context_attn_lns['article'], X_article, after=True)
 
         X_contexts.append(X_article)
-
-
-        residual = X
-        X_entity = self.maybe_layer_norm(
-            self.context_attn_lns['entity'], X, before=True)
-        X_entity, attn = self.context_attns['entity'](
-            query=X_entity,
-            key=contexts['entity'],
-            value=contexts['entity'],
-            key_padding_mask=contexts['entity_mask'],
-            incremental_state=None,
-            static_kv=True,
-            need_weights=True)
-        X_entity = F.dropout(X_entity, p=self.dropout,
-                             training=self.training)
-        X_entity = residual + X_entity
-        X_entity = self.maybe_layer_norm(
-            self.context_attn_lns['entity'], X_entity, after=True)
-        X_contexts.append(X_entity)
 
         X_context = torch.cat(X_contexts, dim=-1)
         X = self.context_fc(X_context)

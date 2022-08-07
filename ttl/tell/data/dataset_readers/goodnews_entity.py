@@ -112,7 +112,8 @@ class EntityGoodNewsReader(DatasetReader):
                     entities_vector = np.load(efile)
             except (FileNotFoundError, OSError):
                 err += 1
-                continue
+                entities = []
+                entities_vector = []
 
             yield self.article_to_instance(article, image, sample['image_index'], image_path, entities, entities_vector)
 
